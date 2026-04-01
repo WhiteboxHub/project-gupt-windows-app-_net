@@ -1,5 +1,6 @@
 ﻿using System.Drawing;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -11,6 +12,7 @@ namespace ClientViewer;
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
+/// Auto-connect silent remote desktop client
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -19,15 +21,46 @@ public partial class MainWindow : Window
     private int _hostWidth = 1920;
     private int _hostHeight = 1080;
     private bool _isConnected;
-    private bool _isRemoteControl;
-    private string _hostAddress = string.Empty;
+    private bool _isRemoteControl = true;
+    private string _hostAddress = "127.0.0.1"; // Default fallback
     private int _hostPort = 5000;
 
     public MainWindow()
     {
         InitializeComponent();
+        LoadConfig(); // Load config.json
         InitializeComponents();
         SetupUI();
+        
+        Loaded += MainWindow_Loaded;
+    }
+
+    private void LoadConfig()
+    {
+        try
+        {
+            string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            if (File.Exists(configPath))
+            {
+                string json = File.ReadAllText(configPath);
+                var config = JsonSerializer.Deserialize<ConfigSettings>(json);
+                if (config != null)
+                {
+                    _hostAddress = config.host ?? "127.0.0.1";
+                    _hostPort = config.port > 0 ? config.port : 5000;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Config load error: {ex.Message}");
+        }
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        await Task.Delay(1000);
+        await ConnectAsync(_hostAddress, _hostPort);
     }
 
     private void InitializeComponents()
@@ -50,37 +83,17 @@ public partial class MainWindow : Window
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // Top panel - connection settings
-        var topPanel = new StackPanel { Margin = new Thickness(10) };
+        // Minimal top panel - just shows connection info
+        var topPanel = new StackPanel { Margin = new Thickness(10), Orientation = Orientation.Horizontal };
         
-        var hostPanel = new DockPanel();
-        hostPanel.Children.Add(new TextBlock { Text = "Host: ", VerticalAlignment = VerticalAlignment.Center });
-        var hostBox = new TextBox { Name = "HostBox", Width = 150, Margin = new Thickness(5, 0, 20, 0) };
-        hostBox.Text = "localhost";
-        hostPanel.Children.Add(hostBox);
+        var hostLabel = new TextBlock 
+        { 
+            Text = $"Connecting to {_hostAddress}:{_hostPort}...",
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = System.Windows.Media.Brushes.Blue
+        };
+        topPanel.Children.Add(hostLabel);
         
-        hostPanel.Children.Add(new TextBlock { Text = "Port: ", VerticalAlignment = VerticalAlignment.Center });
-        var portBox = new TextBox { Name = "PortBox", Width = 80, Margin = new Thickness(5, 0, 20, 0) };
-        portBox.Text = "5000";
-        hostPanel.Children.Add(portBox);
-        
-        topPanel.Children.Add(hostPanel);
-
-        var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
-        
-        var connectButton = new Button { Name = "ConnectButton", Content = "Connect", Width = 80, Margin = new Thickness(0, 0, 10, 0) };
-        connectButton.Click += (s, e) => Connect(hostBox.Text, portBox.Text);
-        buttonPanel.Children.Add(connectButton);
-        
-        var disconnectButton = new Button { Name = "DisconnectButton", Content = "Disconnect", Width = 80, IsEnabled = false };
-        disconnectButton.Click += (s, e) => Disconnect();
-        buttonPanel.Children.Add(disconnectButton);
-        
-        var controlCheckBox = new CheckBox { Name = "ControlCheckBox", Content = "Remote Control", Margin = new Thickness(20, 0, 0, 0), IsEnabled = false };
-        controlCheckBox.Click += (s, e) => _isRemoteControl = controlCheckBox.IsChecked == true;
-        buttonPanel.Children.Add(controlCheckBox);
-        
-        topPanel.Children.Add(buttonPanel);
         Grid.SetRow(topPanel, 0);
         grid.Children.Add(topPanel);
 
@@ -104,16 +117,12 @@ public partial class MainWindow : Window
 
         // Bottom - Status
         var statusPanel = new Border { Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(240, 240, 240)), Padding = new Thickness(10) };
-        var statusLabel = new TextBlock { Name = "StatusLabel", Text = "Status: Not connected" };
+        var statusLabel = new TextBlock { Name = "StatusLabel", Text = "Status: Connecting..." };
         statusPanel.Child = statusLabel;
         Grid.SetRow(statusPanel, 2);
         grid.Children.Add(statusPanel);
 
         Content = grid;
-        
-        // Store references for later
-        connectButton.Tag = disconnectButton;
-        disconnectButton.Tag = connectButton;
         
         // Handle mouse events for remote control
         scrollViewer.MouseMove += (s, e) => 
@@ -189,20 +198,8 @@ public partial class MainWindow : Window
         };
     }
 
-    private async void Connect(string host, string portText)
+    private async Task ConnectAsync(string host, int port)
     {
-        if (string.IsNullOrWhiteSpace(host))
-        {
-            MessageBox.Show("Please enter a host address", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        if (!int.TryParse(portText, out int port) || port < 1024 || port > 65535)
-        {
-            MessageBox.Show("Please enter a valid port (1024-65535)", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
         _hostAddress = host;
         _hostPort = port;
 
@@ -210,12 +207,14 @@ public partial class MainWindow : Window
         if (connected)
         {
             _isConnected = true;
-            UpdateStatus("Connected to " + _hostAddress);
-            UpdateButtons(false, true, true);
+            UpdateStatus("Connected - Remote Control Enabled");
         }
         else
         {
-            MessageBox.Show("Failed to connect to host", "Connection Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            // Try reconnecting after 2 seconds
+            UpdateStatus("Connection failed - Retrying...");
+            await Task.Delay(2000);
+            await ConnectAsync(host, port);
         }
     }
 
@@ -385,4 +384,13 @@ public partial class MainWindow : Window
         _currentFrame?.Dispose();
         base.OnClosed(e);
     }
+}
+
+/// <summary>
+/// Configuration settings loaded from config.json
+/// </summary>
+public class ConfigSettings
+{
+    public string? host { get; set; }
+    public int port { get; set; }
 }
